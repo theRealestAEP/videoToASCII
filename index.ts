@@ -2,15 +2,16 @@ import sharp from 'sharp';
 import ffmpeg from 'fluent-ffmpeg';
 import fs from 'fs';
 import path from 'path';
-const { exec } = require('child_process');
 const readline = require('readline');
 
 const detailedAsciiMap = [
     '-', '@', 'B', '%', '8', '&', 'W', 'M', '#', '*', 'C', 'J', 'U', 'Y', 'X', 'z', 'c', 'v', 'u', 'n', 'x', 'r', 'j', 'f', 't', '/', '\\', '|', '(', ')', '1', '{', '}', '[', ']', '?', '-', '_', '+', '~', '<', '>', 'i', '!', 'l', 'I', ';', ':', ',', '"', '^', '`', "'", '.', ' '
 ];
 
-
-
+const textFramesFolder = 'textFrames';
+const args = process.argv.slice(2);
+const videoPath = args[0];
+const videoWidth = parseInt(args[1]) || 100; // Default to 30 if not provided
 
 function playAsciiFrames(frameRate = 30) {
     const delay = 1000 / frameRate; // in milliseconds
@@ -33,14 +34,13 @@ function playAsciiFrames(frameRate = 30) {
 
 function startAnimation(delay: number) {
     // Get all frame files
-    const frameFiles = fs.readdirSync('textFrames')
+    const frameFiles = fs.readdirSync(textFramesFolder)
         .filter(file => file.startsWith('ascii_frame_') && file.endsWith('.txt'))
         .sort((a: any, b: any) => {
             const numA = parseInt(a.match(/\d+/)[0]);
             const numB = parseInt(b.match(/\d+/)[0]);
             return numA - numB;
         });
-    console.log(frameFiles)
     if (frameFiles.length === 0) {
         console.error("No ASCII frames found. Make sure ascii_frame_*.txt files are in the current directory.");
         return;
@@ -48,41 +48,32 @@ function startAnimation(delay: number) {
 
     let frameIndex = 0;
 
+    const { stdout } = process;
+
     function displayNextFrame() {
         if (frameIndex >= frameFiles.length) {
             frameIndex = 0; // Reset to start if we've shown all frames
         }
-
+    
         const frameName = frameFiles[frameIndex];
-
-        // Clear screen (works for Windows and Unix-like systems)
-        process.stdout.write('\x1Bc');
-
-        // Get terminal size
-        // exec('tput cols && tput lines', (error: any, stdout: any, stderr: any) => {
-        //     if (error) {
-        //         console.error(`exec error: ${error}`);
-        //         return;
-        //     }
-
-        //     const [cols, rows] = stdout.split('\n').map(Number);
-        const frameContent = fs.readFileSync(`textFrames/${frameName}`, 'utf8');
-        //     const contentHeight = frameContent.split('\n').length;
-
-        // Calculate padding to center vertically
-        // const padding = Math.max(0, Math.floor((rows - contentHeight) / 2));
-
-        // // Add top padding
-        // for (let i = 0; i < padding; i++) {
-        //     console.log();
-        // }
-
-        // Display frame content
-        console.log(frameContent);
-
+        const frameContent = fs.readFileSync(`${textFramesFolder}/${frameName}`, 'utf8');
+    
+        // Prepare the frame off-screen
+        let buffer = '\x1b[?25l'; // Hide cursor
+        buffer += '\x1b[H'; // Move cursor to top-left corner
+    
+        // Add the frame content
+        buffer += frameContent;
+    
+        // Clear any remaining lines
+        // const lines = frameContent.split('\n').length;
+        buffer += '\x1b[0J'; // Clear from cursor to end of screen
+    
+        // Write the entire buffer at once
+        stdout.write(buffer);
+    
         frameIndex++;
         setTimeout(displayNextFrame, delay);
-        // });
     }
 
     displayNextFrame();
@@ -219,23 +210,16 @@ async function videoToAscii(videoPath: string, outputWidth = 100, frameRate: num
     });
 }
 
-async function main() {
+async function main(video: string, outputWidth: number) {
     if (!fs.existsSync('textFrames')) {
         fs.mkdirSync('textFrames');
     }
     const videoPath = 'test.mp4';
     type FrameRate = number;
     let frameRate = await getVideoFrameRate(videoPath) as FrameRate;
-    fs.writeFileSync('textFrames/frame_rate.txt', frameRate.toString());
+    // fs.writeFileSync(`${textFramesFolder}/frame_rate.txt`, frameRate.toString());
     console.log(`Frame rate: ${frameRate}`);
-    let asciiFrames = await videoToAscii(videoPath, 400, frameRate) as any;
-    // .then((asciiFrames: any) => {
-    //     console.log(`Converted ${asciiFrames.length} frames to ASCII`);
-    //     // Here you can do something with the ASCII frames, like saving them to files or displaying them
-    //     asciiFrames.forEach((frame: any, index: number) => {
-    //         fs.writeFileSync(`textFrames/ascii_frame_${index}.txt`, frame);
-    //     });
-    // });
+    let asciiFrames = await videoToAscii(videoPath, outputWidth, frameRate) as any;
     asciiFrames.forEach((frame: any, index: number) => {
         fs.writeFileSync(`textFrames/ascii_frame_${index}.txt`, frame);
     });
@@ -243,4 +227,22 @@ async function main() {
     playAsciiFrames(frameRate);
 }
 
-main();
+if (!videoPath) {
+    console.error("Please provide a video file path.");
+    console.error("Usage: bun index.ts <video_file_path> [video_width]");
+    process.exit(1);
+}
+function deleteTextFramesFolder() {
+    if (fs.existsSync(textFramesFolder)) {
+        fs.rmSync(textFramesFolder, { recursive: true, force: true });
+        console.log(`\nDeleted folder: ${textFramesFolder}`);
+    }
+}
+
+process.on('exit', deleteTextFramesFolder);
+process.on('SIGINT', () => {
+    console.log('\nCaught interrupt signal');
+    process.exit();
+});
+
+main(videoPath, videoWidth);
